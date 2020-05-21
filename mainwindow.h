@@ -39,6 +39,10 @@ private slots:
 
     int startWebcamMonitoring(const Mat& cameraMatrix, const Mat& distortionCoefficients);
 
+    void displayOrientationLine(Mat frame, float side, Vec3d rvec, Vec3d tvec, const Mat& cameraMatrix, const Mat& distCoeffs);
+
+    vector<Point3f> getCornersInCameraWorld(float side, Vec3d rvec, Vec3d tvec);
+
     vector<float> checkDifferentMarkers(vector<int> markerIds);
 
     Mat eulerAnglesToRotationMatrix(Vec3d &theta);

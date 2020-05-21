@@ -22,6 +22,9 @@
 #include <algorithm>
 #include <vector>
 
+#include "opencv2/core/base.hpp"
+#include "opencv4/opencv2/core/check.hpp"
+
 typedef vector<int> IntContainer;
 typedef IntContainer::iterator IntIterator;
 
@@ -156,9 +159,10 @@ int MainWindow::startWebcamMonitoring(const Mat& cameraMatrix, const Mat& distor
 
     Ptr < aruco::Dictionary> markerDictionary = aruco::getPredefinedDictionary(aruco::DICT_4X4_50);
 
-    //Camera = 0
-    //PathToFile = "/home/joao/Videos/Webcam/Aruco/close.webm"
-    VideoCapture vid(0);
+    //Camera = 0 or open video from file
+    //string PathToFile = "/home/joao/Videos/Webcam/Aruco/orientationLine.webm";
+    int PathToFile = 0;
+    VideoCapture vid(PathToFile);
 
     if(!vid.isOpened())
     {
@@ -167,6 +171,7 @@ int MainWindow::startWebcamMonitoring(const Mat& cameraMatrix, const Mat& distor
 
     vector<Vec3d> rotationVectors, translationVectors;
     vector<Vec3d> rotationVectorsDegrees;
+    vector<Point3f> anglesInCameraWorld;
     Vec3f angles;
 
 
@@ -187,8 +192,16 @@ int MainWindow::startWebcamMonitoring(const Mat& cameraMatrix, const Mat& distor
         {
             aruco::estimatePoseSingleMarkers(markerCorners, arucoSquareDimensions[i], cameraMatrix, distortionCoefficients, rotationVectors, translationVectors);
 
-            //aruco::drawAxis(frame, cameraMatrix, distortionCoefficients, rotationVectors[i], translationVectors[i], 0.05f);
-            aruco::drawDetectedMarkers(frame, markerCorners, markerIds);
+            if(ui->showMarkersAxis->isChecked())
+                aruco::drawAxis(frame, cameraMatrix, distortionCoefficients, rotationVectors[i], translationVectors[i], 0.05f);
+
+            if(ui->showMarkers->isChecked())
+                aruco::drawDetectedMarkers(frame, markerCorners, markerIds);
+
+            if(ui->showOrientationLine->isChecked())
+                displayOrientationLine(frame, arucoSquareDimensions[i], rotationVectors[i], translationVectors[i], cameraMatrix, distortionCoefficients);
+
+            anglesInCameraWorld = getCornersInCameraWorld(arucoSquareDimensions[i], rotationVectors[i], translationVectors[i]);
 
             // Calc camera pose
             Mat R, rotationMatrix;
@@ -205,7 +218,7 @@ int MainWindow::startWebcamMonitoring(const Mat& cameraMatrix, const Mat& distor
             //rotationMatrix = eulerAnglesToRotationMatrix(rotationVectors[i]);
             angles = rotationMatrixToEulerAngles(R);
 
-            //cout << fixed << setprecision(0); // Casas decimais
+            cout << fixed << setprecision(0); // Casas decimais
             //cout << "MarkerId: " << markerIds[i] << " ";
             //cout << " Distance: " << distance * 1000 << endl;
             //cout << "Angles [X(red), Y(green), Z(blue)]: " << angles * 180 / M_PI << endl;
@@ -252,12 +265,78 @@ int MainWindow::startWebcamMonitoring(const Mat& cameraMatrix, const Mat& distor
         update_window(frame);
         if(waitKey(30) >= 0) break;
 
-        //sleep(1);
+        //usleep(200*1000);
     }
 
 
 
     return 1;
+}
+
+
+void MainWindow::displayOrientationLine(Mat frame, float side, Vec3d rvec, Vec3d tvec, const Mat& cameraMatrix, const Mat& distCoeffs)
+{
+    //vector<Point3f> corners3d = getCornersInCameraWorld(side, rvec, tvec);
+    int thickness = 3;
+    float orientationAngle = 0, depthAngle = 0;;
+
+    // project axes points
+    vector<Point3f> axesPoints;
+    axesPoints.push_back(Point3f(side, side, 0));
+    axesPoints.push_back(Point3f(-side, -side, 0));
+
+    vector<Point2f> imagePoints;
+    projectPoints(axesPoints, rvec, tvec, cameraMatrix, distCoeffs, imagePoints);
+
+    // draw axes lines
+    line(frame, Point2f(imagePoints[0].x, imagePoints[0].y), Point2f(imagePoints[1].x, imagePoints[1].y), Scalar(0, 0, 255), thickness);
+
+    orientationAngle = atan2(imagePoints[0].y - imagePoints[1].y, imagePoints[0].x - imagePoints[1].x) * 180 / M_PI;
+
+    cout << "Orientation Angle: " << orientationAngle << endl;
+
+    //line(frame, imagePoints[0], imagePoints[2], Scalar(0, 255, 0), thickness);
+    //line(frame, imagePoints[0], imagePoints[3], Scalar(0, 0, 255), thickness);
+
+    return;
+}
+
+
+vector<Point3f> MainWindow::getCornersInCameraWorld(float side, Vec3d rvec, Vec3d tvec){
+
+     double half_side = side/2;
+
+
+     // compute rot_mat
+     Mat rot_mat;
+     Rodrigues(rvec, rot_mat);
+
+     // transpose of rot_mat for easy columns extraction
+     Mat rot_mat_t = rot_mat.t();
+
+     // the two E-O and F-O vectors
+     double * tmp = rot_mat_t.ptr<double>(0);
+     Point3f camWorldE(tmp[0]*half_side,
+                       tmp[1]*half_side,
+                       tmp[2]*half_side);
+
+     tmp = rot_mat_t.ptr<double>(1);
+     Point3f camWorldF(tmp[0]*half_side,
+                       tmp[1]*half_side,
+                       tmp[2]*half_side);
+
+     // convert tvec to point
+     Point3f tvec_3f(tvec[0], tvec[1], tvec[2]);
+
+     // return vector:
+     vector<Point3f> ret(4,tvec_3f);
+
+     ret[0] +=  camWorldE + camWorldF;
+     ret[1] += -camWorldE + camWorldF;
+     ret[2] += -camWorldE - camWorldF;
+     ret[3] +=  camWorldE - camWorldF;
+
+     return ret;
 }
 
 void MainWindow::writeInFileDistances(int nFrames, vector<int> markerIds, vector<float> markerDistances, int realDistance, int realAngle, int realStepAngle)
