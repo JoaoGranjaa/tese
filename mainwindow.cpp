@@ -28,6 +28,8 @@
 typedef vector<int> IntContainer;
 typedef IntContainer::iterator IntIterator;
 
+
+
 MainWindow::MainWindow(QWidget *parent) :
     QMainWindow(parent),
     ui(new Ui::MainWindow)
@@ -147,12 +149,11 @@ bool MainWindow::loadCameraCalibration(string name, Mat& cameraMatrix, Mat& dist
 int MainWindow::startWebcamMonitoring(const Mat& cameraMatrix, const Mat& distortionCoefficients)
 {
     Mat frame;
-    vector<Point3f> pos;
     int nFrames = 0;
 
     vector<int> markerIds;
 
-    vector<vector<Point2f>> markerCorners, rejectedCandidates;
+    vector<vector<Point2f>> markerCorners;
 
     aruco::DetectorParameters parameters;
     parameters.polygonalApproxAccuracyRate = 0.05; //0.05 default
@@ -170,9 +171,8 @@ int MainWindow::startWebcamMonitoring(const Mat& cameraMatrix, const Mat& distor
     }
 
     vector<Vec3d> rotationVectors, translationVectors;
-    vector<Vec3d> rotationVectorsDegrees;
-    vector<Point3f> anglesInCameraWorld;
     Vec3f angles;
+
 
 
     while(true)
@@ -182,15 +182,37 @@ int MainWindow::startWebcamMonitoring(const Mat& cameraMatrix, const Mat& distor
 
         nFrames++;
 
-        aruco::detectMarkers(frame, markerDictionary, markerCorners, markerIds); // Verificar se existe flags
+        aruco::detectMarkers(frame, markerDictionary, markerCorners, markerIds);
 
         vector<float> arucoSquareDimensions = checkDifferentMarkers(markerIds);
 
-        vector<float> markerDistances;
+        vector<float> markerDistances, orientationAngles;
+        float orientationAngleAvg = 0;
 
-        for(int i=0; i < markerIds.size(); i++)
+
+        vector<group> AUV {
+            {
+                {12, 14}, {NULL, NULL}, {NULL, NULL}
+            },
+            {
+                {13, 15}, {NULL, NULL}, {NULL, NULL}
+            }
+        };
+
+
+
+        for(u_int i=0; i < markerIds.size(); i++)
         {
             aruco::estimatePoseSingleMarkers(markerCorners, arucoSquareDimensions[i], cameraMatrix, distortionCoefficients, rotationVectors, translationVectors);
+
+            //Tentativa de corrigir angulo eixo z
+            /*
+            Mat rotationMatrix;
+            rotationMatrix = eulerAnglesToRotationMatrix(rotationVectors[i]);
+            rotationVectors[i] = rotationMatrixToEulerAngles(rotationMatrix);
+
+            cout << rotationVectors[i] * 180 / M_PI << endl;
+            */
 
             if(ui->showMarkersAxis->isChecked())
                 aruco::drawAxis(frame, cameraMatrix, distortionCoefficients, rotationVectors[i], translationVectors[i], 0.05f);
@@ -198,14 +220,10 @@ int MainWindow::startWebcamMonitoring(const Mat& cameraMatrix, const Mat& distor
             if(ui->showMarkers->isChecked())
                 aruco::drawDetectedMarkers(frame, markerCorners, markerIds);
 
-            if(ui->showOrientationLine->isChecked())
-                displayOrientationLine(frame, arucoSquareDimensions[i], rotationVectors[i], translationVectors[i], cameraMatrix, distortionCoefficients);
-
-            anglesInCameraWorld = getCornersInCameraWorld(arucoSquareDimensions[i], rotationVectors[i], translationVectors[i]);
-
             // Calc camera pose
-            Mat R, rotationMatrix;
+            Mat R;
             Rodrigues(rotationVectors[i], R);
+
             Mat cameraPose = -R.t() * (Mat)translationVectors[i];
 
             double x = cameraPose.at<double>(0,0);
@@ -215,13 +233,20 @@ int MainWindow::startWebcamMonitoring(const Mat& cameraMatrix, const Mat& distor
 
             markerDistances.push_back(distance);
 
-            //rotationMatrix = eulerAnglesToRotationMatrix(rotationVectors[i]);
-            angles = rotationMatrixToEulerAngles(R);
-
             cout << fixed << setprecision(0); // Casas decimais
             //cout << "MarkerId: " << markerIds[i] << " ";
             //cout << " Distance: " << distance * 1000 << endl;
             //cout << "Angles [X(red), Y(green), Z(blue)]: " << angles * 180 / M_PI << endl;
+
+            if(ui->showOrientationLine->isChecked())
+            {
+                orientationAngles.push_back(getOrientationAngle(frame, arucoSquareDimensions[i], rotationVectors[i], translationVectors[i], cameraMatrix, distortionCoefficients));
+                updateAUV(AUV, markerIds[i], orientationAngles[i], markerDistances[i]);
+                printAUV(AUV);
+            }
+
+
+
 
         }
 
@@ -272,11 +297,53 @@ int MainWindow::startWebcamMonitoring(const Mat& cameraMatrix, const Mat& distor
 
     return 1;
 }
-
-
-void MainWindow::displayOrientationLine(Mat frame, float side, Vec3d rvec, Vec3d tvec, const Mat& cameraMatrix, const Mat& distCoeffs)
+void MainWindow::updateAUV(vector<group> &AUV, int markerId, float orientationAngle, float markerDistance)
 {
-    //vector<Point3f> corners3d = getCornersInCameraWorld(side, rvec, tvec);
+    vector<int> index{-1, -1};
+    index = findIndexInAUV(AUV, markerId);
+
+    if(index[0] >= 0 && index[1] >= 0)
+    {
+        AUV[index[0]].distanceId[index[1]] = markerDistance;
+        AUV[index[0]].orientationId[index[1]] = orientationAngle;
+    }
+}
+
+vector<int> MainWindow::findIndexInAUV(vector<group> &AUV, int markerId){
+    for(int i=0; i<AUV.size(); i++)
+    {
+        for(int j=0; j<AUV[i].ids.size(); j++)
+        {
+            if(AUV[i].ids[j] == markerId)
+            {
+                return {i,j};
+            }
+        }
+    }
+
+    return {-1, -1};
+}
+
+void MainWindow::printAUV(vector<group> &AUV)
+{
+    for(int i=0; i<AUV.size(); i++)
+    {
+        for(int j=0; j<AUV[i].ids.size(); j++)
+        {
+            cout << "Id: " << AUV[i].ids[j];
+            cout << " Orientation: " << AUV[i].orientationId[j];
+            cout << " Distance: " << AUV[i].distanceId[j];
+            cout << endl;
+        }
+    }
+    cout << endl;
+
+    return;
+}
+
+float MainWindow::getOrientationAngle(Mat frame, float side, Vec3d rvec, Vec3d tvec, const Mat& cameraMatrix, const Mat& distCoeffs)
+{
+    vector<Point3f> corners3d = getCornersInCameraWorld(side, rvec, tvec);
     int thickness = 3;
     float orientationAngle = 0, depthAngle = 0;;
 
@@ -290,17 +357,21 @@ void MainWindow::displayOrientationLine(Mat frame, float side, Vec3d rvec, Vec3d
 
     // draw axes lines
     line(frame, Point2f(imagePoints[0].x, imagePoints[0].y), Point2f(imagePoints[1].x, imagePoints[1].y), Scalar(0, 0, 255), thickness);
+    circle(frame, Point2f(imagePoints[0].x, imagePoints[0].y), 5, Scalar(0, 255, 0), CV_FILLED);
+    //circle(frame, Point(corners3d[2].x, corners3d[2].y), 10, Scalar(255, 0, 0), CV_FILLED);
 
     orientationAngle = atan2(imagePoints[0].y - imagePoints[1].y, imagePoints[0].x - imagePoints[1].x) * 180 / M_PI;
+    //depthAngle = atan2(imagePoints[2].y - imagePoints[3].y, imagePoints[2].x - imagePoints[3].x) * 180 / M_PI;
 
-    cout << "Orientation Angle: " << orientationAngle << endl;
+    //cout << "0: " << sqrt(pow(imagePoints[0].x, 2) + pow(imagePoints[0].y, 2)) << " 1: " << sqrt(pow(imagePoints[1].x, 2) + pow(imagePoints[1].y, 2)) << endl;
+
+    //cout << "Orientation Angle: " << orientationAngle << " Depth Angle: " << depthAngle << endl;
 
     //line(frame, imagePoints[0], imagePoints[2], Scalar(0, 255, 0), thickness);
     //line(frame, imagePoints[0], imagePoints[3], Scalar(0, 0, 255), thickness);
 
-    return;
+    return orientationAngle;;
 }
-
 
 vector<Point3f> MainWindow::getCornersInCameraWorld(float side, Vec3d rvec, Vec3d tvec){
 
@@ -448,7 +519,7 @@ vector<float> MainWindow::checkDifferentMarkers(vector<int> markerIds)
 
     vector<float> ret;
 
-    for(int c=0; c < markerIds.size(); c++)
+    for(u_int c=0; c < markerIds.size(); c++)
     {
         if(markerIds[c] == 0 || markerIds[c] == 1)
             ret.push_back(0.080f);
@@ -480,6 +551,7 @@ vector<float> MainWindow::checkDifferentMarkers(vector<int> markerIds)
 
 Mat MainWindow::eulerAnglesToRotationMatrix(Vec3d &theta)
 {
+
     // Calculate rotation about x axis
     Mat R_x = (Mat_<double>(3,3) <<
                1,       0,              0,
@@ -499,8 +571,16 @@ Mat MainWindow::eulerAnglesToRotationMatrix(Vec3d &theta)
                cos(theta[2]),    -sin(theta[2]),      0,
                sin(theta[2]),    cos(theta[2]),       0,
                0,               0,                  1);
+
+    // Calculate rotation about z axis + 45 degree
+    double d_45 = 45 * M_PI / 180;
+    Mat R_z45 = (Mat_<double>(3,3) <<
+               cos(d_45),    -sin(d_45),      0,
+               sin(d_45),    cos(d_45),       0,
+               0,               0,                  1);
+
     // Combined rotation matrix
-    Mat R = R_z * R_y * R_x;
+    Mat R = R_z45 * R_z * R_y * R_x;
 
     return R;
 
@@ -551,20 +631,6 @@ void MainWindow::on_stopSamples_clicked()
     recordFrames = false;
 }
 
-void MainWindow::on_saveData_clicked()
-{
-    //frames =  ui->frames;
-    //realDistance = ui->distance;
-    //realAngle = ui->angle;
-    //realStepAngle =ui->stepAngle;
-
-    frames = framesToRecord;
-    realDistance = 1000;
-    realAngle = -75;
-    realStepAngle = 5;
-
-    return;
-}
 
 void MainWindow::on_increaseDistance_clicked()
 {

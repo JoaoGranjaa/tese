@@ -26,6 +26,12 @@ public:
     explicit MainWindow(QWidget *parent = 0);
     ~MainWindow();
 
+    struct group {
+        vector<int> ids;
+        vector<float> orientationId;
+        vector<float> distanceId;
+    };
+
 private slots:
     void on_openCamera_clicked();
 
@@ -39,11 +45,17 @@ private slots:
 
     int startWebcamMonitoring(const Mat& cameraMatrix, const Mat& distortionCoefficients);
 
-    void displayOrientationLine(Mat frame, float side, Vec3d rvec, Vec3d tvec, const Mat& cameraMatrix, const Mat& distCoeffs);
+    void updateAUV(vector<group> &AUV, int markerId, float orientationAngle, float markerDistance);
+
+    float getOrientationAngle(Mat frame, float side, Vec3d rvec, Vec3d tvec, const Mat& cameraMatrix, const Mat& distCoeffs);
+
+    vector<int> findIndexInAUV(vector<group> &AUV, int markerId);
 
     vector<Point3f> getCornersInCameraWorld(float side, Vec3d rvec, Vec3d tvec);
 
     vector<float> checkDifferentMarkers(vector<int> markerIds);
+
+    void printAUV(vector<group> &AUV);
 
     Mat eulerAnglesToRotationMatrix(Vec3d &theta);
 
@@ -54,8 +66,6 @@ private slots:
     void on_extractSamples_clicked();
 
     void on_stopSamples_clicked();
-
-    void on_saveData_clicked();
 
     void writeInFileDistances(int nFrames, vector<int> markerIds, vector<float> markerDistances, int realDistance, int realAngle, int realStepAngle);
 
